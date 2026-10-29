@@ -1,0 +1,6 @@
+streamlit>=1.38
+requests
+polyline
+pandas
+google-genai
+streamlit-geolocation
