@@ -195,7 +195,8 @@ evidence: short phrase, e.g. "3 of 5 reviews mention it" or "visible in photos",
 food_score: number 1-10 for food quality, judged ONLY from the reviews and photos,
 fit_score: number 1-10 for how well it fits their taste,
 watch_out: the main recurring complaint, or "none",
-verdict: one line written for them.
+verdict: one line written for them,
+food_photo: the number of the photo that best shows the food (ideally the best dish), or 0 if no photo shows food.
 Never invent dishes that are not in the reviews or visible in the photos.
 Reviews:
 {reviews_text}"""
@@ -213,7 +214,7 @@ def get_photo(name, w=600):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def analyze(pid, name, ptype, rating, reviews, taste, n_photos=2):
+def analyze(pid, name, ptype, rating, reviews, taste, n_photos=4):
     d = requests.get(f"https://places.googleapis.com/v1/places/{pid}", timeout=20,
                      headers={"X-Goog-Api-Key": MAPS_KEY,
                               "X-Goog-FieldMask": "reviews.text,reviews.rating,photos.name"}).json()
@@ -221,7 +222,8 @@ def analyze(pid, name, ptype, rating, reviews, taste, n_photos=2):
     imgs = [img for img in (get_photo(p["name"]) for p in d.get("photos", [])[:n_photos]) if img]
     parts = [PROMPT.format(taste=taste, name=name, ptype=ptype, rating=rating, reviews=reviews,
                            reviews_text=revs or "(no review text)")]
-    parts += [types.Part.from_bytes(data=img, mime_type="image/jpeg") for img in imgs]
+    for i, img in enumerate(imgs, 1):
+        parts += [f"Photo {i}:", types.Part.from_bytes(data=img, mime_type="image/jpeg")]
     cfg = types.GenerateContentConfig(response_mime_type="application/json")
     last = None
     for attempt in range(3):
@@ -230,7 +232,8 @@ def analyze(pid, name, ptype, rating, reviews, taste, n_photos=2):
                 data = json.loads(gem_client().models.generate_content(model=model, contents=parts, config=cfg).text)
                 if isinstance(data, list):
                     data = data[0]
-                return data, (imgs[0] if imgs else None)
+                pick = int(num(data.get("food_photo"), 0))
+                return data, (imgs[pick - 1] if 1 <= pick <= len(imgs) else None)  # only show a real food photo
             except Exception as e:
                 last = e
                 if not any(c in str(e) for c in RETRYABLE):
@@ -277,7 +280,9 @@ def render(picks, dest):
             if r.get("evidence"):
                 st.caption(r["evidence"])
             rating = r["rating"] if pd.notna(r["rating"]) else "–"
-            st.markdown(f"⭐ {rating} ({int(r['reviews']):,} reviews) · +{max(r['detour_min'], 0):.0f} min · {fmt_price(r)}")
+            det = r["detour_min"]
+            det_txt = "right on your route" if det <= 1 else f"+{det:.0f} min detour"
+            st.markdown(f"⭐ {rating} ({int(r['reviews']):,} reviews) · {det_txt} · {fmt_price(r)}")
             watch = str(r.get("watch_out") or "none")
             if watch.lower() not in ("none", "nan", ""):
                 st.markdown(f"⚠️ {watch}")
