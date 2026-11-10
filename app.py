@@ -34,7 +34,8 @@ PLACES_MASK = ("places.id,places.displayName,places.rating,places.userRatingCoun
                "places.priceRange,places.primaryTypeDisplayName,places.googleMapsUri,"
                "places.regularOpeningHours.periods,places.utcOffsetMinutes,routingSummaries")
 QUERIES = ("best restaurants", "highly rated local restaurant", "popular restaurant")
-NOT_DINE_IN = "Delivery|Takeout|Takeaway|Catering|Grocery|Gas Station|Convenience"
+NOT_DINE_IN = (r"\b(?:Delivery|Takeout|Takeaway|Catering|Grocery|Gas Station|Convenience|"
+               r"Inn|Lodging|Hotel|Motel|Bed & Breakfast|Bed and Breakfast|Resort|Guest House)\b")
 RETRYABLE = ("503", "429", "504", "DEADLINE", "UNAVAILABLE", "timed out", "Timeout")
 PRICE = {"PRICE_LEVEL_FREE": "Free", "PRICE_LEVEL_INEXPENSIVE": "$", "PRICE_LEVEL_MODERATE": "$$",
          "PRICE_LEVEL_EXPENSIVE": "$$$", "PRICE_LEVEL_VERY_EXPENSIVE": "$$$$"}
@@ -196,7 +197,7 @@ Below are {n} candidate restaurants, each with recent customer reviews and numbe
 Return a JSON list with exactly one object per restaurant, in the same order, each with keys:
 place: the restaurant number,
 best_dish: the dish (or famous side, e.g. salsa) customers praise most, or "unclear",
-evidence: short phrase, e.g. "3 of 5 reviews mention it" or "visible in photos",
+evidence: specific and countable, e.g. "3 of 5 reviews praise it" or "2 reviews + visible in photo 1" (never just "mentioned in reviews"),
 food_score: number 1-10 for food quality, judged ONLY from that place's reviews and photos,
 fit_score: number 1-10 for how well it fits their taste,
 watch_out: the main recurring complaint, or "none",
