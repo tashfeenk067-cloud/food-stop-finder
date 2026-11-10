@@ -25,7 +25,7 @@ st.set_page_config(page_title="Food Stop Finder", page_icon="🍽️", layout="c
 # ---------------- config ----------------
 MAPS_KEY = st.secrets["MAPS_KEY"]
 GEMINI_KEY = st.secrets["GEMINI_KEY"]
-MODELS = list(st.secrets.get("GEMINI_MODELS", ["gemini-3.8-flash", "gemini-3-flash-preview"]))
+PINNED_MODELS = list(st.secrets.get("GEMINI_MODELS", []))  # optional override; otherwise auto-detected
 TZ = ZoneInfo(st.secrets.get("TZ", "America/Chicago"))
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
@@ -207,7 +207,7 @@ Never invent dishes that are not in the reviews or visible in the photos."""
 
 @st.cache_resource
 def gem_client():
-    return genai.Client(api_key=GEMINI_KEY, http_options=types.HttpOptions(timeout=45000))
+    return genai.Client(api_key=GEMINI_KEY, http_options=types.HttpOptions(timeout=30000))
 
 
 def get_photo(name, w=400):  # smaller photos = faster download and faster AI
@@ -230,25 +230,55 @@ def place_material(pid, n_photos=2):
     return revs, imgs
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def gemini_models():
+    """Ask Google which Flash models this key can use right now (names change often)."""
+    if PINNED_MODELS:
+        return PINNED_MODELS
+    skip = ("image", "tts", "audio", "live", "embedding", "native", "exp", "8b")
+    found = []
+    try:
+        for m in gem_client().models.list():
+            name = (m.name or "").removeprefix("models/")
+            acts = getattr(m, "supported_actions", None) or []
+            if "flash" in name and "generateContent" in acts and not any(s in name for s in skip):
+                found.append(name)
+    except Exception:
+        pass
+    def rank(n):
+        ver = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", n)[:1]] or [0.0]
+        return ("preview" in n, -ver[0], "lite" in n, len(n))  # stable > newest > full flash > shortest name
+    found = sorted(set(found), key=rank)
+    lite = [n for n in found if "lite" in n][:1]  # a fast lite model as last resort
+    picks = [n for n in found if "lite" not in n][:2] + lite
+    return picks or ["gemini-flash-latest", "gemini-flash-lite-latest"]
+
+
 def gemini_json(parts):
-    """One Gemini call with retries and model fallback. Tries low 'thinking' first for speed."""
+    """One Gemini call. Tries each available model; a missing or busy model just moves on to the next."""
     fast = types.GenerateContentConfig(response_mime_type="application/json",
                                        thinking_config=types.ThinkingConfig(thinking_level="low"))
     plain = types.GenerateContentConfig(response_mime_type="application/json")
-    last = None
+    errors = []
     for attempt in range(2):
-        for model in MODELS:
+        busy = False
+        for model in gemini_models():
             for cfg in (fast, plain):
                 try:
                     return json.loads(gem_client().models.generate_content(model=model, contents=parts, config=cfg).text)
                 except Exception as e:
-                    last = e
-                    if any(c in str(e) for c in RETRYABLE):
-                        break  # busy: try the next model
-                    if cfg is plain:
-                        raise  # a real error, not just the speed setting
+                    msg = str(e)
+                    errors.append(f"{model}: {msg[:160]}")
+                    if any(c in msg for c in RETRYABLE):
+                        busy = True
+                        break  # busy or slow: next model
+                    if "404" in msg or "NOT_FOUND" in msg:
+                        break  # model retired: next model
+                    # anything else on the fast setting: retry this model with the plain setting
+        if not busy:
+            break
         time.sleep(3)
-    raise last
+    raise RuntimeError(" | ".join(errors[-4:]) or "Gemini failed")
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
